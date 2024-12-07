@@ -1,0 +1,133 @@
+import mongoose from "mongoose";
+import { invalidateCacheProps, orderItems } from "../types/types.js";
+import { Product } from "../models/products.js";
+import { myNode } from "../app.js";
+import { ErrorHandler } from "./error-class.js";
+import { DiagnosticCategory } from "typescript";
+import { TryCatch } from "../middlewares/error.js";
+
+const connectDB = async () => {
+  try {
+    const connect = await mongoose.connect("mongodb://127.0.0.1:27017/ecom");
+    console.log(`DB Connected:${connect.connection.host}`);
+  } catch (error) {
+    console.log(error);
+  }
+};
+
+export default connectDB;
+
+export const reduceStock = async (orderItems: orderItems[]) => {
+  for (let index = 0; index < orderItems.length; index++) {
+    const order = orderItems[index];
+    const productId = order.productId;
+    console.log("getting product ID", productId);
+    const product = await Product.findById(productId);
+    if (!product) {
+      return new Error("Product Not Found...");
+    }
+    product.stock = product.stock! - order.quantity;
+    await product.save();
+  }
+};
+
+export const calculatePercentage = (thisMonth: number, lastMonth: number) => {
+  if (lastMonth == 0) {
+    const percent = thisMonth * 100;
+    return Number(percent.toFixed(1));
+  }
+  const percent = (thisMonth / lastMonth) * 100;
+  return Number(percent.toFixed(0));
+};
+
+export const getIinventories = async ({
+  categories,
+  products,
+}: {
+  categories: string[];
+  products: number;
+}) => {
+  const categoriesCountPromise = categories.map((category) => {
+    return Product.countDocuments({ category });
+  });
+  const categoriesCount = await Promise.all(categoriesCountPromise);
+
+  const categoryCount: Record<string, number>[] = [];
+  categories.forEach((category, i) => {
+    categoryCount.push({
+      [category]: Math.round((categoriesCount[i] / products) * 100),
+    });
+  });
+  return categoryCount;
+};
+type MyDocument = {
+  createdAt: Date;
+  discount?: number;
+  total?: number;
+};
+
+type funcProps = {
+  length: number;
+  docArr: MyDocument[];
+  today: Date;
+  property?: "total" | "discount";
+};
+
+export const getChatData = ({ length, docArr, today, property }: funcProps) => {
+  const data: number[] = new Array(length).fill(0);
+  docArr.forEach((i) => {
+    const creationDate = i.createdAt;
+    const monthdiff = (today.getMonth() - creationDate.getMonth() + 12) % 12;
+    if (monthdiff < length) {
+      if (property) {
+        data[length - monthdiff - 1] += i[property]!;
+      } else {
+        data[length - monthdiff - 1] += 1;
+      }
+    }
+  });
+  return data;
+};
+
+export const invalidateCache = ({
+  product,
+  order,
+  admin,
+  userId,
+  orderId,
+  productId,
+}: invalidateCacheProps) => {
+  if (product) {
+    let productKeys: string[] = [
+      "all-products",
+      "latest-products",
+      "categories",
+    ];
+    if (typeof productId === "string") {
+      productKeys.push(`product-${productId}`);
+    }
+    if (typeof productId === "object") {
+      productId.forEach((i) => {
+        productKeys.push(`product-${i}`);
+      });
+    }
+    myNode.del(productKeys);
+  }
+  if (admin) {
+    let data: string[] = [
+      "dashboard-stats",
+      "pie-chart",
+      "line-chart",
+      "bar-chart",
+    ];
+    myNode.del(data);
+  }
+  if (order) {
+    let orderArr: string[] = [
+      "all-orders",
+      `order-${orderId}`,
+      `myorders-${userId}`,
+    ];
+    myNode.del(orderArr);
+  }
+};
